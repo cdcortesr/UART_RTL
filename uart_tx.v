@@ -28,9 +28,6 @@ module uart_tx #(
     reg [data_bits_g-1:0] buffer = 0;
     integer i = 0;
 
-    initial begin
-        tx_serial_p = 1'b1;
-    end
     // Next state logic
     always @(posedge clk_tx_p) begin
         if (!rst_n_p) begin
