@@ -84,36 +84,37 @@ module axi_fifo_tx #(
 
     always @(posedge s_axi_aclk or negedge s_axi_aresetn) begin :write_fsm
         if (!s_axi_aresetn) begin
+            s_axi_bvalid  <= 1'b0;  //Mandatory, other signals custom to this implementation
             s_axi_awready <= 1'b0;
             s_axi_wready  <= 1'b0;
+            s_axi_bresp   <= RESP_OKAY;
+            wr_state <= WR_RST;
+        end else begin
+            s_axi_awready <= 1'b1;  //Default state is high, wont wait for valid from master.
+            s_axi_wready  <= 1'b1;
             s_axi_bvalid  <= 1'b0;
             s_axi_bresp   <= RESP_OKAY;
-        end else begin
-                case (wr_state)
-                    WR_IDLE: begin
-                        s_axi_awready <= 1'b1;
-                        s_axi_wready  <= 1'b1;
-                        s_axi_bvalid  <= 1'b0;
-                        s_axi_bresp   <= RESP_OKAY;
-                        if (s_axi_awvalid && s_axi_wvalid) begin
-                            wr_state <= WR_EXEC;
-                        end
-                    end
-                    WR_EXEC: begin
-                        s_axi_awready <= 1'b0;
-                        s_axi_wready  <= 1'b0; 
-                    end
-                    WR_RESP: begin
-                        s_axi_bvalid <= 1'b1;
-                        if (s_axi_bready) begin
-                            wr_state <= WR_IDLE;
-                        end
-                    end
-                    default: begin
-                        wr_state <= WR_IDLE;
-                    end
-                endcase
+            if (s_axi_awvalid and s_axi_awready) begin
+                awdone = 1'b1;
+                addr_buffer_tx <= s_axi_awaddr;
             end
+            if (s_axi_wvalid and s_axi_wready) begin
+                for (i = 0; i < DATA_WIDTH/8; i = i + 1) begin
+                    masked_wdata[i*8 +: 8] = axi_wstrb[i] ? axi_wdata[i*8 +: 8] : 8'h00;
+                end
+                data_buffer_tx <= masked_wdata;
+                wdone <= 1'b1;
+            end
+        end
+    end
+
+    always @(posedge int_clk) begin
+        if (wdone && awdone) begin
+            start_wtransaction <= 1'b1;
+        end
+        if (done_wtransaction) begin
+            s_axi_bvalid <= 1'b1;   //AXI3 can assert bvalid just with wvalid/ready exchange no need to wait 4 aw exchange.
+            s_axi_bresp   <= RESP_OKAY;
         end
     end
 
@@ -121,33 +122,25 @@ module axi_fifo_tx #(
     
     always @(posedge s_axi_aclk or negedge s_axi_aresetn) begin :read_fsm
         if (!s_axi_aresetn) begin
+            s_axi_rvalid  <= 1'b0;      //Mandatory, other signals custom to this implementation
             s_axi_arready <= 1'b0;
-            s_axi_rvalid  <= 1'b0;
             s_axi_rresp   <= RESP_OKAY;
             s_axi_rdata   <= {C_S_AXI_DATA_WIDTH{1'b0}};
         end else begin
-            case (rd_state)
-                RD_IDLE: begin
-                    s_axi_arready <= 1'b1;
-                    s_axi_rvalid  <= 1'b0;
-                    s_axi_rresp   <= RESP_OKAY;
-                    if (s_axi_arvalid) begin
-                        rd_state <= RD_EXEC;
-                    end
-                end
-                RD_EXEC: begin
-                    s_axi_arready <= 1'b0;
-                end
-                RD_RESP: begin
-                    s_axi_rvalid <= 1'b1;
-                    if (s_axi_rready) begin
-                        rd_state <= RD_IDLE;
-                    end
-                end
-                default: begin
-                    rd_state <= RD_IDLE;
-                end
-            endcase
+            if (s_axi_arvalid and s_axi_arready) begin
+                addr_buffer_rx <= s_axi_araddr;
+                rdone <= 1'b1;
+            end
+        end
+    end
+
+    always @(posedge int_clk) begin
+        if (rdone) begin
+            start_rtransaction <= 1'b1;
+        end
+        if (done_rtransaction) begin
+            s_axi_rvalid <= 1'b1;
+            s_axi_rdata <= buffer_rx;
         end
     end
 
