@@ -37,7 +37,7 @@ use IEEE.NUMERIC_STD.ALL;
 use work.cust_type_pkg.ALL;
 
 
-entity uart_rx_decode is
+entity uart_rx is
 	Generic (
 		Stop_b_g 		: natural := 1;
 		flow_ctrl_g		: boolean := false;
@@ -57,9 +57,9 @@ entity uart_rx_decode is
 		frame_err_p	: out BOOLEAN := FALSE;		-- Active if the stop bit is not HIGH at sampling point
 		parity_err_p: out BOOLEAN := FALSE		-- Both flags get cleared once a new frame is detected
 	);
-end entity uart_rx_decode;
+end entity uart_rx;
 
-architecture RTL of uart_rx_decode is
+architecture RTL of uart_rx is
 	signal rx_state_s    	: state := IDLE;
 	signal buffer_s			: STD_LOGIC_VECTOR (data_bits_g -1 downto 0) := (others => '0');
 	signal st_detected_s 	: BOOLEAN := FALSE;
