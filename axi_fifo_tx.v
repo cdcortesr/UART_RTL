@@ -14,7 +14,7 @@ module axi_fifo_tx #(
 )(
     // Global signals
     input wire s_axi_aclk,
-    input wire s_axi_aresetn,       //Synchronous assertion (high) and optional asynchronous deassertion (low)
+    input wire s_axi_aresetn,       //Synchronous assertion (high) && optional asynchronous deassertion (low)
 
     // AXI4-Lite write address channel
     input wire [C_S_AXI_ADDR_WIDTH-1:0] s_axi_awaddr,
@@ -30,7 +30,7 @@ module axi_fifo_tx #(
 
     // AXI4-Lite write response channel
     input wire s_axi_bready,
-    output reg s_axi_bvalid,
+    output wire s_axi_bvalid,
     output reg [1:0] s_axi_bresp,
 
     // AXI4-Lite read address channel
@@ -41,7 +41,7 @@ module axi_fifo_tx #(
     // AXI4-Lite read data channel
     input wire [2:0] s_axi_arprot,  // Not used in this implementation
     input wire s_axi_rready,
-    output reg s_axi_rvalid,
+    output wire s_axi_rvalid,
     output reg [C_S_AXI_DATA_WIDTH-1:0] s_axi_rdata,
     output reg [1:0] s_axi_rresp,
 
@@ -68,80 +68,177 @@ module axi_fifo_tx #(
     localparam ADDR_IRQ_EN    = 6'h10;
     localparam ADDR_IRQ_STAT  = 6'h14;
 
-    // Write FSM states
+    localparam IDLE         = 2'b00;
+    localparam TRANSACTION  = 2'b01;
+    localparam RESP         = 2'b10;
 
-    localparam [1:0] WR_IDLE = 2'd0,
-                     WR_EXEC = 2'd1,
-                     WR_RESP = 2'd2;
+    reg aw_hndshk, w_hndshk, b_hndshk;
+    reg [C_S_AXI_ADDR_WIDTH-1:0] addr_buffer_tx;
+    reg [C_S_AXI_DATA_WIDTH-1:0] data_buffer_tx;
+    reg [C_S_AXI_DATA_WIDTH/8-1:0] strb;
+    reg ar_hndshk, r_hndshk;
+    reg [C_S_AXI_ADDR_WIDTH-1:0] addr_buffer_rx;
+    reg done_wtransaction, done_rtransaction;
+    reg start_wtransaction, start_rtransaction;
+    reg w_state, r_state;
+    reg int_clk;
+    reg overrun;
 
-    // Read FSM states
+    // Write FSM
 
-    localparam [1:0] RD_IDLE = 2'd0,
-                     RD_EXEC = 2'd1,
-                     RD_RESP = 2'd2;
-
-
-
-    always @(posedge s_axi_aclk or negedge s_axi_aresetn) begin :write_fsm
+    always @(posedge s_axi_aclk or negedge s_axi_aresetn) begin
         if (!s_axi_aresetn) begin
-            s_axi_bvalid  <= 1'b0;  //Mandatory, other signals custom to this implementation
-            s_axi_awready <= 1'b0;
-            s_axi_wready  <= 1'b0;
-            s_axi_bresp   <= RESP_OKAY;
-            wr_state <= WR_RST;
+            start_wtransaction <= 1'b0;
+            w_state <= IDLE;
+            aw_hndshk <= 1'b0;
+            w_hndshk <= 1'b0;
+            b_hndshk <= 1'b0;
         end else begin
-            s_axi_awready <= 1'b1;  //Default state is high, wont wait for valid from master.
-            s_axi_wready  <= 1'b1;
-            s_axi_bvalid  <= 1'b0;
-            s_axi_bresp   <= RESP_OKAY;
-            if (s_axi_awvalid and s_axi_awready) begin
-                awdone = 1'b1;
-                addr_buffer_tx <= s_axi_awaddr;
-            end
-            if (s_axi_wvalid and s_axi_wready) begin
-                for (i = 0; i < DATA_WIDTH/8; i = i + 1) begin
-                    masked_wdata[i*8 +: 8] = axi_wstrb[i] ? axi_wdata[i*8 +: 8] : 8'h00;
+            case (w_state)
+                IDLE: begin
+                    if (s_axi_awvalid && s_axi_awready) begin
+                        aw_hndshk <= 1'b1;
+                        addr_buffer_tx <= s_axi_awaddr;
+                    end 
+                    if (s_axi_wvalid && s_axi_wready) begin
+                        w_hndshk        <= 1'b1;
+                        data_buffer_tx  <= s_axi_wdata;
+                        strb            <= s_axi_wstrb;
+                    end
+                    if (aw_hndshk && w_hndshk) begin
+                        w_state <= TRANSACTION;
+                        start_wtransaction <= 1'b1;
+                    end
                 end
-                data_buffer_tx <= masked_wdata;
-                wdone <= 1'b1;
-            end
+                TRANSACTION: begin
+                    if (done_wtransaction) begin
+                        start_wtransaction <= 1'b0;
+                        w_state <= RESP;
+                        b_hndshk <= 1'b0;
+                    end
+                end
+                RESP: begin
+                    if (s_axi_bready && s_axi_bvalid) begin
+                        b_hndshk <= 1'b1;
+                        aw_hndshk <= 1'b0;
+                        w_hndshk <= 1'b0;
+                        w_state <= IDLE;
+                    end
+                end
+            endcase
         end
     end
 
-    always @(posedge int_clk) begin
-        if (wdone && awdone) begin
-            start_wtransaction <= 1'b1;
-        end
-        if (done_wtransaction) begin
-            s_axi_bvalid <= 1'b1;   //AXI3 can assert bvalid just with wvalid/ready exchange no need to wait 4 aw exchange.
-            s_axi_bresp   <= RESP_OKAY;
-        end
-    end
+    // A MASTER interface must drive ARVALID, AWVALID, && WVALID LOW.
+    // The earliest point after reset that a master is permitted to begin driving ARVALID, AWVALID, or WVALID HIGH is at a rising ACLK edge after ARESETn is HIGH
 
+    assign s_axi_awready = s_axi_aresetn && !aw_hndshk;
+    assign s_axi_wready  = s_axi_aresetn && !w_hndshk;
+    assign s_axi_bvalid  = s_axi_aresetn && !b_hndshk;       //Mandatory, other signals custom to this implementation
+    // AXI3 can assert bvalid just with wvalid/ready exchange no need to wait 4 aw exchange.
+    // Missing to implement bresp at reset
     // Read FSM
     
     always @(posedge s_axi_aclk or negedge s_axi_aresetn) begin :read_fsm
         if (!s_axi_aresetn) begin
-            s_axi_rvalid  <= 1'b0;      //Mandatory, other signals custom to this implementation
-            s_axi_arready <= 1'b0;
-            s_axi_rresp   <= RESP_OKAY;
-            s_axi_rdata   <= {C_S_AXI_DATA_WIDTH{1'b0}};
+            start_rtransaction <= 1'b0;
+            r_state <= IDLE;
+            s_axi_rdata <= {C_S_AXI_ADDR_WIDTH{1'b0}};
+            ar_hndshk <= 1'b0;
+            r_hndshk <= 1'b0;
         end else begin
-            if (s_axi_arvalid and s_axi_arready) begin
-                addr_buffer_rx <= s_axi_araddr;
-                rdone <= 1'b1;
-            end
+            case (r_state)
+                IDLE: begin
+                    if (s_axi_arvalid && s_axi_arready) begin
+                        addr_buffer_rx <= s_axi_araddr;
+                        ar_hndshk <= 1'b1;
+                        r_state <= TRANSACTION;
+                        start_rtransaction <= 1'b1;
+                    end
+                end
+                TRANSACTION: begin
+                    if (done_rtransaction) begin
+                        start_rtransaction <= 1'b0;
+                        r_state <= RESP;
+                        r_hndshk <= 1'b0;
+                    end
+                end
+                RESP: begin
+                    if (s_axi_rready && s_axi_rvalid) begin
+                        r_hndshk <= 1'b1;
+                        r_state <= IDLE;
+                    end
+                end
+            endcase
         end
     end
 
-    always @(posedge int_clk) begin
-        if (rdone) begin
-            start_rtransaction <= 1'b1;
-        end
-        if (done_rtransaction) begin
-            s_axi_rvalid <= 1'b1;
-            s_axi_rdata <= buffer_rx;
+    assign s_axi_arready = s_axi_aresetn && !ar_hndshk;
+    assign s_axi_rvalid  = s_axi_aresetn && !r_hndshk;      //Mandatory, other signals custom to this implementation
+    // Missing to implement rresp && rdata at reset
+
+    parameter DATA_WIDTH = 8;
+    parameter ADDR_WIDTH = 5;   // 32 entries in the FIFO
+
+        // storage: no reset, so the tool can infer RAM
+    reg [DATA_WIDTH-1:0] mem [0:(1<<ADDR_WIDTH)-1];
+
+    // pointers are one bit wider than the address
+    reg [ADDR_WIDTH:0] wr_ptr;
+    reg [ADDR_WIDTH:0] rd_ptr;
+
+    // flags
+    assign empty = (wr_ptr == rd_ptr);
+    assign full  = (wr_ptr[ADDR_WIDTH-1:0] == rd_ptr[ADDR_WIDTH-1:0]) &&
+                   (wr_ptr[ADDR_WIDTH]     != rd_ptr[ADDR_WIDTH]);
+
+    reg count;
+    reg i;
+    always @(*) begin
+        count = 0;
+        for (i = 0; i < DATA_WIDTH/8; i = i + 1)
+            count = count + strb[i];
+    end
+
+    // pointers && overrun flag
+    always @(posedge int_clk or negedge s_axi_aresetn) begin
+        if (!s_axi_aresetn) begin
+            wr_ptr  <= 0;
+            rd_ptr  <= 0;
+            overrun <= 1'b0;
+        end else begin
+            if (start_wtransaction && !full) begin
+                if (wr_ptr - rd_ptr >= count) begin
+                    for (i = 0; i < DATA_WIDTH/8; i = i + 1) begin
+                        if (strb[i] && !full) begin
+                            mem[wr_ptr[ADDR_WIDTH-1:0]] <= data_buffer_tx[i*8 +: 8];
+                        end
+                        wr_ptr  <= wr_ptr + 1'b1;   // wraps by itself
+                    end
+                    done_wtransaction <= 1'b1;
+                    s_axi_bresp <= RESP_OKAY;   // Indicate a successful response (AXI protocol)
+                end else if (start_wtransaction && full) begin
+                    overrun <= 1'b1;
+                    done_wtransaction <= 1'b1;
+                    s_axi_bresp <= RESP_SLVERR;   // Indicate an error response (AXI protocol)
+                end
+            end
+            if (start_rtransaction && !empty) begin
+
+                rd_ptr  <= rd_ptr + 1'b1;              // rd_ptr increments in next cycle, so memory still points to the correct location for this cycle
+                s_axi_rdata <= mem[rd_ptr[ADDR_WIDTH-1:0]];
+                s_axi_rresp <= RESP_OKAY;   // Indicate a successful response (AXI protocol)
+                done_rtransaction <= 1'b1;
+            end else if (start_rtransaction && empty) begin
+                s_axi_rresp <= RESP_SLVERR;   // Indicate an error response (AXI protocol)
+                done_rtransaction <= 1'b1;
+            end
+            done_rtransaction <= 1'b0;
+            done_wtransaction <= 1'b0;
         end
     end
 
 endmodule
+
+// Considerations for FIFO size 
+// sprite1(a,1020,862)  max length of instruction   25 bytes 
