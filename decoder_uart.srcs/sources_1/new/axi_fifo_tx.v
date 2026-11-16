@@ -61,7 +61,7 @@ module axi_fifo_tx #(
     // Register address map
     // --------------------------------------------------
 
-    localparam ADDR_TX_BUFF   = 6'h00;      // # of bytes taken or written into the buffer is encoded in the lower 8 bits
+    localparam ADDR_TX_BUFF   = 6'h00;     
     localparam ADDR_RX_BUFF   = 6'h04;
     localparam ADDR_STATUS    = 6'h08;
     localparam ADDR_CONTROL   = 6'h0C;
@@ -241,4 +241,4 @@ module axi_fifo_tx #(
 endmodule
 
 // Considerations for FIFO size 
-// sprite1(a,1020,862)  max length of instruction   25 bytes 
+// sprite1(a,1020,862)  max length of instruction   25 bytes

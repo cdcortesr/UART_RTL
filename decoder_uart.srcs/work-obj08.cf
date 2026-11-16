@@ -1,0 +1,5 @@
+v 4
+file / "c:\Users\christian.rivera\Documents\decoder_uart\decoder_uart.srcs\sources_1\imports\Downloads\RX.vhd" "dd85c3de0913eb4a685bd6b7c27141f794b06286" "20261116160658.416":
+  package cust_type_pkg at 1( 0) + 0 on 14;
+  entity decoder_rx at 25( 330) + 0 on 15;
+  architecture rtl of decoder_rx at 49( 1269) + 0 on 16;
