@@ -16,7 +16,7 @@ module uart_tx #(
     input  wire        rst_n_p,
     input  wire [data_bits_g-1:0]  data_tx_p,
     input  wire        valid_p,         // valid/ready interface goes to module that provides data to transmit
-    output reg         ready_p = 1'b0,         // ready signal to module that provides data to transmit
+    output reg         ready_p = 1'b1,         // ready signal to module that provides data to transmit
     output reg         tx_serial_p = 1'b1
 );
     localparam [2:0] IDLE = 3'd0,
@@ -36,6 +36,7 @@ module uart_tx #(
             case (state_tx)
             IDLE: begin
                 i = 0;
+                ready_p <= 1;
                 tx_serial_p <= 1;
                 if (valid_p == 1) begin
                     ready_p <= 1;

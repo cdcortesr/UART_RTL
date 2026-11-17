@@ -1,8 +1,11 @@
 v 4
-file / "c:\Users\christian.rivera\Documents\decoder_uart\decoder_uart.srcs\sources_1\new\uart_rx.vhd" "6020117a54163d88bf81c73fa38572760ca3ec3a" "20261116185203.046":
-  package cust_type_pkg at 9( 461) + 0 on 22;
-  entity uart_rx at 34( 787) + 0 on 23;
-  architecture rtl of uart_rx at 62( 1793) + 0 on 24;
+file / "c:\Users\christian.rivera\Documents\decoder_uart\decoder_uart.srcs\sources_1\new\uart_rx_sync.vhd" "c681ed3ae5d01cf36e05d9f88da97a4e250085a1" "20261116191746.886":
+  entity uart_rx_sync at 22( 491) + 0 on 48;
+  architecture behavioral of uart_rx_sync at 42( 1058) + 0 on 49;
+file / "c:\Users\christian.rivera\Documents\decoder_uart\decoder_uart.srcs\sources_1\new\uart_rx.vhd" "6020117a54163d88bf81c73fa38572760ca3ec3a" "20261116191746.152":
+  package cust_type_pkg at 9( 461) + 0 on 39;
+  entity uart_rx at 34( 787) + 0 on 40;
+  architecture rtl of uart_rx at 62( 1793) + 0 on 41;
 file / "c:\Users\christian.rivera\Documents\decoder_uart\decoder_uart.srcs\sources_1\new\uart_rx_decode.vhd" "3876e6a5132e1de42b73eb0d24b1579e476cff9f" "20261116184400.603":
   entity uart_rx_decode at 34( 787) + 0 on 18;
   architecture rtl of uart_rx_decode at 62( 1807) + 0 on 19;
@@ -12,3 +15,14 @@ file / "c:\Users\christian.rivera\Documents\decoder_uart\decoder_uart.srcs\sourc
 file / "c:\Users\christian.rivera\Documents\decoder_uart\decoder_uart.srcs\sources_1\new\uart_fifo_tx.vhd" "f2a35eec013dd914522db6587f0739025a78601f" "20261116184613.302":
   entity uart_fifo_tx at 22( 491) + 0 on 20;
   architecture behavioral of uart_fifo_tx at 40( 1057) + 0 on 21;
+file / "c:\Users\christian.rivera\Documents\decoder_uart\decoder_uart.srcs\sources_1\new\uart_clk_gen.vhd" "26bb3cff4e42fe131591589d74b51f77ad9b9073" "20261116191746.711":
+  package oversample_pkg at 24( 495) + 0 on 44 body;
+  package body oversample_pkg at 29( 640) + 0 on 45;
+  entity uart_clk_gen at 39( 903) + 0 on 46;
+  architecture behavioral of uart_clk_gen at 77( 2025) + 0 on 47;
+file / "c:\Users\christian.rivera\Documents\decoder_uart\decoder_uart.srcs\sources_1\new\uart_traffic_gen.vhd" "d4acb8fdb6cbe48dfa46fff9e83fb491e59a9c1b" "20261116191747.067":
+  entity uart_traffic_gen at 22( 495) + 0 on 50;
+  architecture behavioral of uart_traffic_gen at 38( 956) + 0 on 51;
+file / "c:\Users\christian.rivera\Documents\decoder_uart\decoder_uart.srcs\sim_1\new\uart_clk_gen_tb.vhd" "7ce42510751a2cdebfaaf066a13404552dd1c164" "20261116191746.526":
+  entity uart_clk_gen_tb at 1( 0) + 0 on 42;
+  architecture sim of uart_clk_gen_tb at 8( 119) + 0 on 43;

@@ -45,10 +45,16 @@ module axi_fifo_tx #(
     output reg [C_S_AXI_DATA_WIDTH-1:0] s_axi_rdata,
     output reg [1:0] s_axi_rresp,
 
-    // UART interface
+    // UART tx interface
     input wire tx_ready,
     output reg tx_valid,
     output reg [data_bits_g-1:0] tx_data
+
+    // UART rx interface
+    input wire [data_bits_g-1:0] rx_data
+    input wire rx_valid,
+    output reg rx_ready,
+    
     );
 
     // AXI response codes
@@ -64,16 +70,13 @@ module axi_fifo_tx #(
     localparam ADDR_TX_BUFF   = 6'h00;     
     localparam ADDR_RX_BUFF   = 6'h04;
     localparam ADDR_STATUS    = 6'h08;
-    localparam ADDR_CONTROL   = 6'h0C;
-    localparam ADDR_IRQ_EN    = 6'h10;
-    localparam ADDR_IRQ_STAT  = 6'h14;
 
     localparam IDLE         = 2'b00;
     localparam TRANSACTION  = 2'b01;
     localparam RESP         = 2'b10;
 
     reg aw_hndshk, w_hndshk, b_hndshk;
-    reg [C_S_AXI_ADDR_WIDTH-1:0] addr_buffer_tx;
+    reg [C_S_AXI_ADDR_WIDTH-1:0] register_addr;
     reg [C_S_AXI_DATA_WIDTH-1:0] data_buffer_tx;
     reg [C_S_AXI_DATA_WIDTH/8-1:0] strb;
     reg ar_hndshk, r_hndshk;
@@ -98,7 +101,7 @@ module axi_fifo_tx #(
                 IDLE: begin
                     if (s_axi_awvalid && s_axi_awready) begin
                         aw_hndshk <= 1'b1;
-                        addr_buffer_tx <= s_axi_awaddr;
+                        register_addr <= s_axi_awaddr;
                     end 
                     if (s_axi_wvalid && s_axi_wready) begin
                         w_hndshk        <= 1'b1;
@@ -106,8 +109,39 @@ module axi_fifo_tx #(
                         strb            <= s_axi_wstrb;
                     end
                     if (aw_hndshk && w_hndshk) begin
-                        w_state <= TRANSACTION;
-                        start_wtransaction <= 1'b1;
+                        case (register_addr)
+                            ADDR_TX_BUFF: begin
+                                if (start_wtransaction && !full) begin
+                                    temp_w = wr_ptr;   // Use a temporary pointer to track the write location
+                                    if (wr_ptr - rd_ptr >= count) begin
+                                        for (i = 0; i < DATA_WIDTH/8; i = i + 1) begin
+                                            if (strb[i]) begin
+                                                mem_w[temp_w[ADDR_WIDTH-1:0]] <= data_buffer_tx[i*8 +: 8];
+                                                temp_w = temp_w + 1'b1;   // wraps by itself
+                                            end
+                                        end
+                                        wr_ptr <= temp_w;   // Update the actual write pointer after writing all bytes
+                                        done_wtransaction <= 1'b1;
+                                        s_axi_bresp <= RESP_OKAY;   // Indicate a successful response (AXI protocol)
+                                    end 
+                                end else if (start_wtransaction && full) begin
+                                        done_wtransaction <= 1'b1;
+                                        s_axi_bresp <= RESP_SLVERR;   // Indicate an error response (AXI protocol)
+                                end else begin
+                                    done_wtransaction <= 1'b0;
+                                end
+                                start_wtransaction <= 1'b1;
+                            end
+                            ADDR_STATUS: begin
+                                w_state <= TRANSACTION;
+                                start_wtransaction <= 1'b1;
+                            end
+                            default: begin
+                                s_axi_bresp <= 2'b10; // SLVERR response for invalid address
+                                b_hndshk <= 1'b0;
+                            end
+                        endcase
+                        w_state <= RESP;
                     end
                 end
                 TRANSACTION: begin
@@ -181,7 +215,8 @@ module axi_fifo_tx #(
     parameter ADDR_WIDTH = 5;   // 32 entries in the FIFO
 
         // storage: no reset, so the tool can infer RAM
-    reg [DATA_WIDTH-1:0] mem [0:(1<<ADDR_WIDTH)-1];
+    reg [DATA_WIDTH-1:0] mem_w [0:(1<<ADDR_WIDTH)-1];
+    reg [DATA_WIDTH-1:0] mem_r [0:(1<<ADDR_WIDTH)-1];
 
     // pointers are one bit wider than the address
     reg [ADDR_WIDTH:0] wr_ptr;
@@ -200,7 +235,9 @@ module axi_fifo_tx #(
             count = count + strb[i];
     end
 
-    // pointers && overrun flag
+    reg [ADDR_WIDTH:0] temp_w;
+
+    // Write to TX FIFO
     always @(posedge int_clk or negedge s_axi_aresetn) begin
         if (!s_axi_aresetn) begin
             wr_ptr  <= 0;
@@ -208,34 +245,50 @@ module axi_fifo_tx #(
             overrun <= 1'b0;
         end else begin
             if (start_wtransaction && !full) begin
+                temp_w = wr_ptr;   // Use a temporary pointer to track the write location
                 if (wr_ptr - rd_ptr >= count) begin
                     for (i = 0; i < DATA_WIDTH/8; i = i + 1) begin
-                        if (strb[i] && !full) begin
-                            mem[wr_ptr[ADDR_WIDTH-1:0]] <= data_buffer_tx[i*8 +: 8];
+                        if (strb[i]) begin
+                            mem_w[temp_w[ADDR_WIDTH-1:0]] <= data_buffer_tx[i*8 +: 8];
+                            temp_w = temp_w + 1'b1;   // wraps by itself
                         end
-                        wr_ptr  <= wr_ptr + 1'b1;   // wraps by itself
                     end
+                    wr_ptr <= temp_w;   // Update the actual write pointer after writing all bytes
                     done_wtransaction <= 1'b1;
                     s_axi_bresp <= RESP_OKAY;   // Indicate a successful response (AXI protocol)
-                end else if (start_wtransaction && full) begin
-                    overrun <= 1'b1;
+                end 
+            end else if (start_wtransaction && full) begin
                     done_wtransaction <= 1'b1;
                     s_axi_bresp <= RESP_SLVERR;   // Indicate an error response (AXI protocol)
-                end
+            end else begin
+                done_wtransaction <= 1'b0;
             end
-            if (start_rtransaction && !empty) begin
+        end
+    end
 
+    // Read from RX FIFO
+
+
+
+    // Read from RX FIFO
+
+    always @(posedge int_clk or negedge s_axi_aresetn) begin
+        if (!s_axi_aresetn) begin
+            rd_ptr  <= 0;
+        end else begin
+            if (start_rtransaction && !empty) begin
                 rd_ptr  <= rd_ptr + 1'b1;              // rd_ptr increments in next cycle, so memory still points to the correct location for this cycle
-                s_axi_rdata <= mem[rd_ptr[ADDR_WIDTH-1:0]];
+                s_axi_rdata <= mem_r[rd_ptr[ADDR_WIDTH-1:0]];
                 s_axi_rresp <= RESP_OKAY;   // Indicate a successful response (AXI protocol)
                 done_rtransaction <= 1'b1;
             end else if (start_rtransaction && empty) begin
                 s_axi_rresp <= RESP_SLVERR;   // Indicate an error response (AXI protocol)
                 done_rtransaction <= 1'b1;
+            end else begin
+                done_rtransaction <= 1'b0;
             end
-            done_rtransaction <= 1'b0;
-            done_wtransaction <= 1'b0;
         end
+        
     end
 
 endmodule
