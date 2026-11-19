@@ -76,11 +76,11 @@ module axi_fifo_tx #(
     localparam RESP         = 2'b10;
 
     reg aw_hndshk, w_hndshk, b_hndshk;
-    reg [C_S_AXI_ADDR_WIDTH-1:0] register_addr;
+    reg [C_S_AXI_ADDR_WIDTH-1:0] write_addr;
     reg [C_S_AXI_DATA_WIDTH-1:0] data_buffer_tx;
     reg [C_S_AXI_DATA_WIDTH/8-1:0] strb;
     reg ar_hndshk, r_hndshk;
-    reg [C_S_AXI_ADDR_WIDTH-1:0] addr_buffer_rx;
+    reg [C_S_AXI_ADDR_WIDTH-1:0] read_addr;
     reg done_wtransaction, done_rtransaction;
     reg start_wtransaction, start_rtransaction;
     reg w_state, r_state;
@@ -89,6 +89,10 @@ module axi_fifo_tx #(
 
     // Write FSM
 
+    assign s_axi_awready = s_axi_aresetn && !aw_hndshk;
+    assign s_axi_wready  = s_axi_aresetn && !w_hndshk;
+    assign s_axi_bvalid  = s_axi_aresetn && !b_hndshk;
+
     always @(posedge s_axi_aclk or negedge s_axi_aresetn) begin
         if (!s_axi_aresetn) begin
             start_wtransaction <= 1'b0;
@@ -96,59 +100,49 @@ module axi_fifo_tx #(
             aw_hndshk <= 1'b0;
             w_hndshk <= 1'b0;
             b_hndshk <= 1'b0;
+            s_axi_bvalid <= 1'b0;   //Mandatory, other signals custom to this implementation
+            s_axi_bresp <= RESP_OKAY;   // Default response
+            s_axi_awready <= 1'b0;   
+            s_axi_wready <= 1'b0;   
         end else begin
             case (w_state)
                 IDLE: begin
+                    s_axi_awready <= 1'b1;
+                    s_axi_wready <= 1'b1;
                     if (s_axi_awvalid && s_axi_awready) begin
                         aw_hndshk <= 1'b1;
-                        register_addr <= s_axi_awaddr;
+                        s_axi_awready <= 1'b0; 
+                        write_addr <= s_axi_awaddr;
                     end 
                     if (s_axi_wvalid && s_axi_wready) begin
                         w_hndshk        <= 1'b1;
+                        s_axi_wready <= 1'b0;
                         data_buffer_tx  <= s_axi_wdata;
                         strb            <= s_axi_wstrb;
                     end
                     if (aw_hndshk && w_hndshk) begin
-                        case (register_addr)
-                            ADDR_TX_BUFF: begin
-                                if (start_wtransaction && !full) begin
-                                    temp_w = wr_ptr;   // Use a temporary pointer to track the write location
-                                    if (wr_ptr - rd_ptr >= count) begin
-                                        for (i = 0; i < DATA_WIDTH/8; i = i + 1) begin
-                                            if (strb[i]) begin
-                                                mem_w[temp_w[ADDR_WIDTH-1:0]] <= data_buffer_tx[i*8 +: 8];
-                                                temp_w = temp_w + 1'b1;   // wraps by itself
-                                            end
+                        if (write_addr = ADDR_TX_BUFF) begin
+                            if (!full) begin
+                                temp_w = wr_ptr;   // Use a temporary pointer to track the write location
+                                if (wr_ptr - rd_ptr >= count) begin
+                                    for (i = 0; i < DATA_WIDTH/8; i = i + 1) begin
+                                        if (strb[i]) begin
+                                            mem_w[temp_w[ADDR_WIDTH-1:0]] <= data_buffer_tx[i*8 +: 8];
+                                            temp_w = temp_w + 1'b1;   // wraps by itself
                                         end
-                                        wr_ptr <= temp_w;   // Update the actual write pointer after writing all bytes
-                                        done_wtransaction <= 1'b1;
-                                        s_axi_bresp <= RESP_OKAY;   // Indicate a successful response (AXI protocol)
-                                    end 
-                                end else if (start_wtransaction && full) begin
-                                        done_wtransaction <= 1'b1;
-                                        s_axi_bresp <= RESP_SLVERR;   // Indicate an error response (AXI protocol)
-                                end else begin
-                                    done_wtransaction <= 1'b0;
-                                end
-                                start_wtransaction <= 1'b1;
+                                    end
+                                    wr_ptr <= temp_w;   // Update the actual write pointer after writing all bytes
+                                    s_axi_bresp <= RESP_OKAY;   // Indicate a successful response (AXI protocol)
+                                end 
+                            end else begin
+                                s_axi_bresp <= RESP_SLVERR;   // Indicate an error response (AXI protocol)
                             end
-                            ADDR_STATUS: begin
-                                w_state <= TRANSACTION;
-                                start_wtransaction <= 1'b1;
-                            end
-                            default: begin
-                                s_axi_bresp <= 2'b10; // SLVERR response for invalid address
-                                b_hndshk <= 1'b0;
-                            end
-                        endcase
+                        end else begin
+                            s_axi_bresp <= 2'b10; // SLVERR response for invalid address
+                            b_hndshk <= 1'b0;
+                        end
                         w_state <= RESP;
-                    end
-                end
-                TRANSACTION: begin
-                    if (done_wtransaction) begin
-                        start_wtransaction <= 1'b0;
-                        w_state <= RESP;
-                        b_hndshk <= 1'b0;
+                        s_axi_bvalid <= 1'b1;
                     end
                 end
                 RESP: begin
@@ -162,20 +156,13 @@ module axi_fifo_tx #(
             endcase
         end
     end
-
-    // A MASTER interface must drive ARVALID, AWVALID, && WVALID LOW.
-    // The earliest point after reset that a master is permitted to begin driving ARVALID, AWVALID, or WVALID HIGH is at a rising ACLK edge after ARESETn is HIGH
-
-    assign s_axi_awready = s_axi_aresetn && !aw_hndshk;
-    assign s_axi_wready  = s_axi_aresetn && !w_hndshk;
-    assign s_axi_bvalid  = s_axi_aresetn && !b_hndshk;       //Mandatory, other signals custom to this implementation
+    
     // AXI3 can assert bvalid just with wvalid/ready exchange no need to wait 4 aw exchange.
     // Missing to implement bresp at reset
     // Read FSM
     
     always @(posedge s_axi_aclk or negedge s_axi_aresetn) begin :read_fsm
         if (!s_axi_aresetn) begin
-            start_rtransaction <= 1'b0;
             r_state <= IDLE;
             s_axi_rdata <= {C_S_AXI_ADDR_WIDTH{1'b0}};
             ar_hndshk <= 1'b0;
@@ -184,21 +171,35 @@ module axi_fifo_tx #(
             case (r_state)
                 IDLE: begin
                     if (s_axi_arvalid && s_axi_arready) begin
-                        addr_buffer_rx <= s_axi_araddr;
+                        read_addr <= s_axi_araddr;
+                        case (read_addr)
+                            ADDR_RX_BUFF: begin
+                                if (!empty) begin
+                                    s_axi_rdata <= mem_r[rd_ptr[ADDR_WIDTH-1:0]];
+                                    rd_ptr <= rd_ptr + 1'b1;   // Increment read pointer after reading
+                                    s_axi_rresp <= OKAY; 
+                                end else begin
+                                    s_axi_rdata <= {DATA_WIDTH{1'b0}}; // Return zero if FIFO is empty
+                                    s_axi_rresp <= SLVERR; //response for empty FIFO
+                                end
+                                r_state <= RESP;
+                            end
+                            ADDR_STATUS: begin
+                                // Implement read logic for status register if needed
+                            end
+                            default: begin
+                                    s_axi_rdata <= {DATA_WIDTH{1'b0}}; // Return zero if FIFO is empty
+                                    s_axi_rresp <= DECERR; // response for non existing address
+                            end
+                        endcase
                         ar_hndshk <= 1'b1;
-                        r_state <= TRANSACTION;
-                        start_rtransaction <= 1'b1;
-                    end
-                end
-                TRANSACTION: begin
-                    if (done_rtransaction) begin
-                        start_rtransaction <= 1'b0;
-                        r_state <= RESP;
                         r_hndshk <= 1'b0;
+                        r_state <= RESP;
                     end
                 end
                 RESP: begin
                     if (s_axi_rready && s_axi_rvalid) begin
+                        ar_hndshk <= 1'b0;
                         r_hndshk <= 1'b1;
                         r_state <= IDLE;
                     end
@@ -227,71 +228,8 @@ module axi_fifo_tx #(
     assign full  = (wr_ptr[ADDR_WIDTH-1:0] == rd_ptr[ADDR_WIDTH-1:0]) &&
                    (wr_ptr[ADDR_WIDTH]     != rd_ptr[ADDR_WIDTH]);
 
-    reg count;
-    reg i;
-    always @(*) begin
-        count = 0;
-        for (i = 0; i < DATA_WIDTH/8; i = i + 1)
-            count = count + strb[i];
-    end
-
-    reg [ADDR_WIDTH:0] temp_w;
-
-    // Write to TX FIFO
-    always @(posedge int_clk or negedge s_axi_aresetn) begin
-        if (!s_axi_aresetn) begin
-            wr_ptr  <= 0;
-            rd_ptr  <= 0;
-            overrun <= 1'b0;
-        end else begin
-            if (start_wtransaction && !full) begin
-                temp_w = wr_ptr;   // Use a temporary pointer to track the write location
-                if (wr_ptr - rd_ptr >= count) begin
-                    for (i = 0; i < DATA_WIDTH/8; i = i + 1) begin
-                        if (strb[i]) begin
-                            mem_w[temp_w[ADDR_WIDTH-1:0]] <= data_buffer_tx[i*8 +: 8];
-                            temp_w = temp_w + 1'b1;   // wraps by itself
-                        end
-                    end
-                    wr_ptr <= temp_w;   // Update the actual write pointer after writing all bytes
-                    done_wtransaction <= 1'b1;
-                    s_axi_bresp <= RESP_OKAY;   // Indicate a successful response (AXI protocol)
-                end 
-            end else if (start_wtransaction && full) begin
-                    done_wtransaction <= 1'b1;
-                    s_axi_bresp <= RESP_SLVERR;   // Indicate an error response (AXI protocol)
-            end else begin
-                done_wtransaction <= 1'b0;
-            end
-        end
-    end
-
-    // Read from RX FIFO
 
 
-
-    // Read from RX FIFO
-
-    always @(posedge int_clk or negedge s_axi_aresetn) begin
-        if (!s_axi_aresetn) begin
-            rd_ptr  <= 0;
-        end else begin
-            if (start_rtransaction && !empty) begin
-                rd_ptr  <= rd_ptr + 1'b1;              // rd_ptr increments in next cycle, so memory still points to the correct location for this cycle
-                s_axi_rdata <= mem_r[rd_ptr[ADDR_WIDTH-1:0]];
-                s_axi_rresp <= RESP_OKAY;   // Indicate a successful response (AXI protocol)
-                done_rtransaction <= 1'b1;
-            end else if (start_rtransaction && empty) begin
-                s_axi_rresp <= RESP_SLVERR;   // Indicate an error response (AXI protocol)
-                done_rtransaction <= 1'b1;
-            end else begin
-                done_rtransaction <= 1'b0;
-            end
-        end
-        
-    end
-
-endmodule
 
 // Considerations for FIFO size 
 // sprite1(a,1020,862)  max length of instruction   25 bytes
