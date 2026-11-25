@@ -114,6 +114,9 @@ module axi_fifo_tx #(
     assign full_rx  = (wr_ptr_rx[ADDR_WIDTH-1:0] == rd_ptr_rx[ADDR_WIDTH-1:0]) &&
                    (wr_ptr_rx[ADDR_WIDTH]     != rd_ptr_rx[ADDR_WIDTH]);
 
+    reg [ADDR_WIDTH:0] free_space =0;
+    reg [ADDR_WIDTH:0] used_space = 0;
+
 
 
     // TX Buffer write FSM
@@ -131,8 +134,10 @@ module axi_fifo_tx #(
         end else begin
             case (tx_state)
                 IDLE: begin
-                    s_axi_awready <= 1'b1;
-                    s_axi_wready <= 1'b1;
+                    if (aw_hndshk == 0)
+                        s_axi_awready <= 1'b1;
+                    if (w_hndshk == 0)
+                        s_axi_wready <= 1'b1;
                     if (s_axi_awvalid && s_axi_awready) begin
                         aw_hndshk <= 1'b1;
                         s_axi_awready <= 1'b0; 
@@ -150,7 +155,9 @@ module axi_fifo_tx #(
                                 integer count;
                                 count = strb[0] + strb[1] + strb[2] + strb[3]; 
                                 temp_ptr_tx = wr_ptr_tx;   // Use a temporary pointer to track the write location
-                                if (wr_ptr_tx[ADDR_WIDTH-1:0] - rd_ptr_tx[ADDR_WIDTH-1:0] >= count) begin: name
+                                used_space = wr_ptr_tx - rd_ptr_tx+1;
+                                free_space = (1 << ADDR_WIDTH);
+                                if (free_space >= count) begin: name
                                     integer i;
                                     for (i = 0; i < DATA_WIDTH/8; i = i + 1) begin
                                         if (strb[i]) begin
@@ -187,13 +194,13 @@ module axi_fifo_tx #(
     // TX Buffer read FSM
 
     always @(posedge int_clk) begin
-        if  (s_axi_aresetn) begin
+        if  (!s_axi_aresetn) begin
             rd_ptr_tx <= 0;
         end else begin
             if (!empty_tx) begin
                 tx_valid <= 1'b1;
-                tx_data <= mem_r[rd_ptr_tx[ADDR_WIDTH-1:0]];   // Read data from FIFO into TX buffer
-                if (tx_ready) begin
+                tx_data <= mem_w[rd_ptr_tx[ADDR_WIDTH-1:0]];   // Read data from FIFO into TX buffer
+                if (tx_ready && tx_valid) begin
                     tx_valid <= 1'b0;
                     rd_ptr_tx <= rd_ptr_tx + 1'b1;   // Increment read pointer after reading
                 end

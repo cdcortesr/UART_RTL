@@ -13,12 +13,12 @@ module axi_uart_tb(
 
     localparam CLK_FREQ = 100_000_000;
     localparam CLK_PERIOD_NS = 1.0e9 / CLK_FREQ;
-    localparam INT_CLK_FREQ = 20_000_000;   // Assuming same frequency as s_axi_aclk
+    localparam INT_CLK_FREQ = 115_200;   // Assuming same frequency as s_axi_aclk
     localparam INT_CLK_PERIOD_NS = 1.0e9 / INT_CLK_FREQ;
 
     reg s_axi_aclk;
     reg s_axi_aresetn;
-    reg s_axi_awaddr;
+    reg [5:0] s_axi_awaddr;
     reg s_axi_awvalid;
     reg [2:0] s_axi_awprot;
     wire s_axi_awready;
@@ -41,7 +41,7 @@ module axi_uart_tb(
     wire [1:0] s_axi_rresp;
 
     reg int_clk;
-    reg tx_ready;
+    wire tx_ready;
     wire tx_valid;
     wire [7:0] tx_data;
     reg [7:0] rx_data;
@@ -52,7 +52,7 @@ module axi_uart_tb(
     localparam ADDR_RX_BUFF   = 6'h04;
     localparam ADDR_STATUS    = 6'h08;
 
-    axi_fifo_tx uut
+    axi_fifo_tx fifo
     (
         .s_axi_aclk(s_axi_aclk),
         .s_axi_aresetn(s_axi_aresetn),
@@ -84,34 +84,55 @@ module axi_uart_tb(
         .rx_ready(rx_ready)
     );
 
+    uart_tx tx
+    (
+        .clk_tx_p(int_clk),
+        .rst_n_p(s_axi_aresetn),
+        .data_tx_p(tx_data),
+        .valid_p(tx_valid),
+        .ready_p(tx_ready),
+        .tx_serial_p(tx_serial)
+    );
+
     always #(CLK_PERIOD_NS / 2) s_axi_aclk = ~s_axi_aclk;
     always #(INT_CLK_PERIOD_NS / 2) int_clk = ~int_clk;
+
+    task tx_transaction;
+        input [31:0] data;
+
+        begin
+            # (CLK_PERIOD_NS * 5);
+
+            s_axi_awaddr = ADDR_TX_BUFF;
+            s_axi_awvalid = 1;
+            s_axi_awprot = 0;
+
+            # (CLK_PERIOD_NS * 5);
+
+            s_axi_wdata = data;
+            s_axi_wstrb = 4'hF;
+            s_axi_wvalid = 1;
+
+            wait (s_axi_bvalid == 1);
+            s_axi_bready = 1;
+            # (CLK_PERIOD_NS * 5);
+        end
+    endtask
 
     initial begin
         s_axi_aclk = 0;
         int_clk = 0;
     end
-
+    integer i;
     initial begin
         s_axi_aresetn = 0;
         # (CLK_PERIOD_NS * 5);
         s_axi_aresetn = 1;
 
-        # (CLK_PERIOD_NS * 5);
-
-        s_axi_awaddr = ADDR_TX_BUFF;
-        s_axi_awvalid = 1;
-        s_axi_awprot = 0;
-
-        # (CLK_PERIOD_NS * 5);
-
-        s_axi_wdata = 8'hAA;
-        s_axi_wstrb = 4'hF;
-        s_axi_wvalid = 1;
-
-        wait (s_axi_bvalid == 1);
-        s_axi_bready = 1;
-        # (CLK_PERIOD_NS * 5);
+        
+        for(i=0; i<32; i=i+1) begin
+            tx_transaction(i);
+        end
 
 
     end
@@ -119,11 +140,16 @@ module axi_uart_tb(
     always @(posedge s_axi_aclk) begin
         if (s_axi_bvalid == 1 && s_axi_bready == 1) begin
             s_axi_bready <= 0;
-        end 
+        end
+        if (s_axi_awvalid == 1 && s_axi_awready == 1) begin
+            s_axi_awvalid <= 0;
+        end
+        if (s_axi_wvalid == 1 && s_axi_wready == 1) begin
+            s_axi_wvalid <= 0;
+        end
     end
 
     initial begin
-        tx_ready = 0;
         rx_valid = 0;
         rx_data = 8'h00;
     end
