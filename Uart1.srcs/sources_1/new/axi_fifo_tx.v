@@ -19,41 +19,43 @@ module axi_fifo_tx #(
     // AXI4-Lite write address channel
     input wire [C_S_AXI_ADDR_WIDTH-1:0] s_axi_awaddr,
     input wire s_axi_awvalid,
-    input wire [2:0] s_axi_awprot,  // Not used in this implementation
-    output wire s_axi_awready,
+    //input wire [2:0] s_axi_awprot,  // Not used in this implementation
+    output reg s_axi_awready,
 
     // AXI4-Lite write data channel
     input wire [C_S_AXI_DATA_WIDTH-1:0] s_axi_wdata,
     input wire [C_S_AXI_DATA_WIDTH/8-1:0] s_axi_wstrb,
     input wire s_axi_wvalid,
-    output wire s_axi_wready,
+    output reg s_axi_wready,
 
     // AXI4-Lite write response channel
     input wire s_axi_bready,
-    output wire s_axi_bvalid,
+    output reg s_axi_bvalid,
     output reg [1:0] s_axi_bresp,
 
     // AXI4-Lite read address channel
     input wire [C_S_AXI_ADDR_WIDTH-1:0] s_axi_araddr,
     input wire s_axi_arvalid,
-    output wire s_axi_arready,
+    output reg s_axi_arready,
 
     // AXI4-Lite read data channel
-    input wire [2:0] s_axi_arprot,  // Not used in this implementation
+    //input wire [2:0] s_axi_arprot,  // Not used in this implementation
     input wire s_axi_rready,
-    output wire s_axi_rvalid,
+    output reg s_axi_rvalid,
     output reg [C_S_AXI_DATA_WIDTH-1:0] s_axi_rdata,
     output reg [1:0] s_axi_rresp,
+
+    input wire int_clk,
 
     // UART tx interface
     input wire tx_ready,
     output reg tx_valid,
-    output reg [data_bits_g-1:0] tx_data
+    output reg [data_bits_g-1:0] tx_data,
 
     // UART rx interface
-    input wire [data_bits_g-1:0] rx_data
+    input wire [data_bits_g-1:0] rx_data,
     input wire rx_valid,
-    output reg rx_ready,
+    output reg rx_ready
     
     );
 
@@ -75,37 +77,59 @@ module axi_fifo_tx #(
     localparam TRANSACTION  = 2'b01;
     localparam RESP         = 2'b10;
 
-    reg aw_hndshk, w_hndshk, b_hndshk;
+    reg aw_hndshk, w_hndshk;
     reg [C_S_AXI_ADDR_WIDTH-1:0] write_addr;
     reg [C_S_AXI_DATA_WIDTH-1:0] data_buffer_tx;
     reg [C_S_AXI_DATA_WIDTH/8-1:0] strb;
-    reg ar_hndshk, r_hndshk;
     reg [C_S_AXI_ADDR_WIDTH-1:0] read_addr;
-    reg done_wtransaction, done_rtransaction;
-    reg start_wtransaction, start_rtransaction;
-    reg w_state, r_state;
-    reg int_clk;
-    reg overrun;
+    reg [1:0] tx_state, rx_state;
+     
+    localparam DATA_WIDTH = 8;
+    localparam ADDR_WIDTH = 5;   // 32 entries in the FIFO, last bit used for wrap-around detection
+    
+            // pointers are one bit wider than the address
+    reg [ADDR_WIDTH:0] wr_ptr_tx = 0;
+    reg [ADDR_WIDTH:0] temp_ptr_tx = 0;
+    reg [ADDR_WIDTH:0] rd_ptr_tx = 0;
 
-    // Write FSM
+    reg [ADDR_WIDTH:0] wr_ptr_rx = 0;
+    reg [ADDR_WIDTH:0] temp_ptr_rx = 0;
+    reg [ADDR_WIDTH:0] rd_ptr_rx = 0;
 
-    assign s_axi_awready = s_axi_aresetn && !aw_hndshk;
-    assign s_axi_wready  = s_axi_aresetn && !w_hndshk;
-    assign s_axi_bvalid  = s_axi_aresetn && !b_hndshk;
+        // storage: no reset, so the tool can infer RAM
+    reg [DATA_WIDTH-1:0] mem_w [0:(1<<ADDR_WIDTH)-1];
+    reg [DATA_WIDTH-1:0] mem_r [0:(1<<ADDR_WIDTH)-1];
 
-    always @(posedge s_axi_aclk or negedge s_axi_aresetn) begin
+
+    // flags
+    wire empty_tx, full_tx;
+    assign empty_tx = (wr_ptr_tx == rd_ptr_tx);
+    assign full_tx  = (wr_ptr_tx[ADDR_WIDTH-1:0] == rd_ptr_tx[ADDR_WIDTH-1:0]) &&
+                   (wr_ptr_tx[ADDR_WIDTH]     != rd_ptr_tx[ADDR_WIDTH]);
+
+
+        // flags
+    wire empty_rx, full_rx;
+    assign empty_rx = (wr_ptr_rx == rd_ptr_rx);
+    assign full_rx  = (wr_ptr_rx[ADDR_WIDTH-1:0] == rd_ptr_rx[ADDR_WIDTH-1:0]) &&
+                   (wr_ptr_rx[ADDR_WIDTH]     != rd_ptr_rx[ADDR_WIDTH]);
+
+
+
+    // TX Buffer write FSM
+
+    always @(posedge s_axi_aclk or negedge s_axi_aresetn) begin: write_fsm
         if (!s_axi_aresetn) begin
-            start_wtransaction <= 1'b0;
-            w_state <= IDLE;
+            tx_state <= IDLE;
             aw_hndshk <= 1'b0;
             w_hndshk <= 1'b0;
-            b_hndshk <= 1'b0;
             s_axi_bvalid <= 1'b0;   //Mandatory, other signals custom to this implementation
             s_axi_bresp <= RESP_OKAY;   // Default response
             s_axi_awready <= 1'b0;   
             s_axi_wready <= 1'b0;   
+            wr_ptr_tx <= 0;
         end else begin
-            case (w_state)
+            case (tx_state)
                 IDLE: begin
                     s_axi_awready <= 1'b1;
                     s_axi_wready <= 1'b1;
@@ -121,115 +145,121 @@ module axi_fifo_tx #(
                         strb            <= s_axi_wstrb;
                     end
                     if (aw_hndshk && w_hndshk) begin
-                        if (write_addr = ADDR_TX_BUFF) begin
-                            if (!full) begin
-                                temp_w = wr_ptr;   // Use a temporary pointer to track the write location
-                                if (wr_ptr - rd_ptr >= count) begin
+                        if (write_addr == ADDR_TX_BUFF) begin
+                            if (!full_tx) begin: count_blck
+                                integer count;
+                                count = strb[0] + strb[1] + strb[2] + strb[3]; 
+                                temp_ptr_tx = wr_ptr_tx;   // Use a temporary pointer to track the write location
+                                if (wr_ptr_tx[ADDR_WIDTH-1:0] - rd_ptr_tx[ADDR_WIDTH-1:0] >= count) begin: name
+                                    integer i;
                                     for (i = 0; i < DATA_WIDTH/8; i = i + 1) begin
                                         if (strb[i]) begin
-                                            mem_w[temp_w[ADDR_WIDTH-1:0]] <= data_buffer_tx[i*8 +: 8];
-                                            temp_w = temp_w + 1'b1;   // wraps by itself
+                                            mem_w[temp_ptr_tx[ADDR_WIDTH-1:0]] <= data_buffer_tx[i*8 +: 8];
+                                            temp_ptr_tx = temp_ptr_tx + 1'b1;  
                                         end
                                     end
-                                    wr_ptr <= temp_w;   // Update the actual write pointer after writing all bytes
+                                    wr_ptr_tx <= temp_ptr_tx;   // Update the actual write pointer after writing all bytes
                                     s_axi_bresp <= RESP_OKAY;   // Indicate a successful response (AXI protocol)
                                 end 
-                            end else begin
+                            end else begin                     // Discard write operation when space available is insufficient
                                 s_axi_bresp <= RESP_SLVERR;   // Indicate an error response (AXI protocol)
                             end
                         end else begin
                             s_axi_bresp <= 2'b10; // SLVERR response for invalid address
-                            b_hndshk <= 1'b0;
                         end
-                        w_state <= RESP;
+                        tx_state <= RESP;
                         s_axi_bvalid <= 1'b1;
                     end
                 end
                 RESP: begin
                     if (s_axi_bready && s_axi_bvalid) begin
-                        b_hndshk <= 1'b1;
+                        s_axi_bvalid <= 1'b0;  
                         aw_hndshk <= 1'b0;
                         w_hndshk <= 1'b0;
-                        w_state <= IDLE;
+                        tx_state <= IDLE;
                     end
                 end
             endcase
         end
     end
-    
-    // AXI3 can assert bvalid just with wvalid/ready exchange no need to wait 4 aw exchange.
-    // Missing to implement bresp at reset
-    // Read FSM
+
+
+    // TX Buffer read FSM
+
+    always @(posedge int_clk) begin
+        if  (s_axi_aresetn) begin
+            rd_ptr_tx <= 0;
+        end else begin
+            if (!empty_tx) begin
+                tx_valid <= 1'b1;
+                tx_data <= mem_r[rd_ptr_tx[ADDR_WIDTH-1:0]];   // Read data from FIFO into TX buffer
+                if (tx_ready) begin
+                    tx_valid <= 1'b0;
+                    rd_ptr_tx <= rd_ptr_tx + 1'b1;   // Increment read pointer after reading
+                end
+            end 
+        end
+    end
+
+
+    // RX Buffer Read FSM
     
     always @(posedge s_axi_aclk or negedge s_axi_aresetn) begin :read_fsm
         if (!s_axi_aresetn) begin
-            r_state <= IDLE;
+            rx_state <= IDLE;
             s_axi_rdata <= {C_S_AXI_ADDR_WIDTH{1'b0}};
-            ar_hndshk <= 1'b0;
-            r_hndshk <= 1'b0;
         end else begin
-            case (r_state)
+            case (rx_state)
                 IDLE: begin
                     if (s_axi_arvalid && s_axi_arready) begin
+                        s_axi_arready <= 1'b0;
                         read_addr <= s_axi_araddr;
                         case (read_addr)
                             ADDR_RX_BUFF: begin
-                                if (!empty) begin
-                                    s_axi_rdata <= mem_r[rd_ptr[ADDR_WIDTH-1:0]];
-                                    rd_ptr <= rd_ptr + 1'b1;   // Increment read pointer after reading
-                                    s_axi_rresp <= OKAY; 
+                                if (!empty_rx) begin
+                                    s_axi_rdata <= mem_r[rd_ptr_rx[ADDR_WIDTH-1:0]];
+                                    rd_ptr_rx <= rd_ptr_rx + 1'b1;   // Increment read pointer after reading
+                                    s_axi_rresp <= RESP_OKAY; 
                                 end else begin
-                                    s_axi_rdata <= {DATA_WIDTH{1'b0}}; // Return zero if FIFO is empty
-                                    s_axi_rresp <= SLVERR; //response for empty FIFO
+                                    s_axi_rdata <= {DATA_WIDTH{1'b0}}; // Return zero if FIFO is empty_tx
+                                    s_axi_rresp <= RESP_SLVERR; //response for empty_tx FIFO
                                 end
-                                r_state <= RESP;
                             end
                             ADDR_STATUS: begin
                                 // Implement read logic for status register if needed
                             end
                             default: begin
-                                    s_axi_rdata <= {DATA_WIDTH{1'b0}}; // Return zero if FIFO is empty
-                                    s_axi_rresp <= DECERR; // response for non existing address
+                                    s_axi_rdata <= {DATA_WIDTH{1'b0}}; // Return zero if FIFO is empty_tx
+                                    s_axi_rresp <= RESP_DECERR; // response for non existing address
                             end
                         endcase
-                        ar_hndshk <= 1'b1;
-                        r_hndshk <= 1'b0;
-                        r_state <= RESP;
+                        rx_state <= RESP;
+                        s_axi_rvalid <= 1'b1;
                     end
                 end
                 RESP: begin
                     if (s_axi_rready && s_axi_rvalid) begin
-                        ar_hndshk <= 1'b0;
-                        r_hndshk <= 1'b1;
-                        r_state <= IDLE;
+                        rx_state <= IDLE;
+                        s_axi_rvalid <= 1'b0;
+                        s_axi_arready <= 1'b1;
                     end
                 end
             endcase
         end
     end
 
-    assign s_axi_arready = s_axi_aresetn && !ar_hndshk;
-    assign s_axi_rvalid  = s_axi_aresetn && !r_hndshk;      //Mandatory, other signals custom to this implementation
-    // Missing to implement rresp && rdata at reset
+    // RX Buffer Write FSM
 
-    parameter DATA_WIDTH = 8;
-    parameter ADDR_WIDTH = 5;   // 32 entries in the FIFO
-
-        // storage: no reset, so the tool can infer RAM
-    reg [DATA_WIDTH-1:0] mem_w [0:(1<<ADDR_WIDTH)-1];
-    reg [DATA_WIDTH-1:0] mem_r [0:(1<<ADDR_WIDTH)-1];
-
-    // pointers are one bit wider than the address
-    reg [ADDR_WIDTH:0] wr_ptr;
-    reg [ADDR_WIDTH:0] rd_ptr;
-
-    // flags
-    assign empty = (wr_ptr == rd_ptr);
-    assign full  = (wr_ptr[ADDR_WIDTH-1:0] == rd_ptr[ADDR_WIDTH-1:0]) &&
-                   (wr_ptr[ADDR_WIDTH]     != rd_ptr[ADDR_WIDTH]);
+    always @(posedge int_clk)begin
+        rx_ready <= !full_rx;
+        if (rx_valid && rx_ready) begin
+            mem_r[wr_ptr_rx[ADDR_WIDTH-1:0]] <= rx_data;   // Write data into FIFO from RX buffer
+            wr_ptr_rx <= wr_ptr_rx + 1'b1;   // Increment write pointer after writing
+        end
+    end
 
 
-
+endmodule
 
 // Considerations for FIFO size 
 // sprite1(a,1020,862)  max length of instruction   25 bytes
