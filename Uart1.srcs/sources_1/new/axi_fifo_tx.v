@@ -159,7 +159,7 @@ module axi_fifo_tx #(
                                 free_space = (1 << ADDR_WIDTH);
                                 if (free_space >= count) begin: name
                                     integer i;
-                                    for (i = 0; i < DATA_WIDTH/8; i = i + 1) begin
+                                    for (i = 0; i < C_S_AXI_DATA_WIDTH/8; i = i + 1) begin
                                         if (strb[i]) begin
                                             mem_w[temp_ptr_tx[ADDR_WIDTH-1:0]] <= data_buffer_tx[i*8 +: 8];
                                             temp_ptr_tx = temp_ptr_tx + 1'b1;  

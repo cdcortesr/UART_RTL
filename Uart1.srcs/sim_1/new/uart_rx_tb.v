@@ -7,14 +7,22 @@
 
 `timescale 10ns / 1ps
 
-module uart_rx_tb();
+module uart_rx_tb(
+    input wire rx_tick,
+    input wire s_axi_aresetn,
+    input wire ready_p,
+    output wire valid_p,
+    output wire [7:0] data_rx_p,
+    output wire frame_err_p,
+    output wire parity_err_p
+);
 
-    reg rx_serial_p = 1;
-    reg clk_rx_p = 0;
-    reg rst_n_p = 0;
-
-    wire [7:0] data_rx_p;
-    wire valid_p, frame_err_p, parity_err_p;
+    wire rx_serial_p;
+    reg uart_rx = 1;
+    wire clk_rx_p;
+    assign clk_rx_p = rx_tick;
+    wire rst_n_p;
+    assign rst_n_p = s_axi_aresetn;
 
     integer bit_idx = 0;
 	integer i = 0;
@@ -25,22 +33,30 @@ module uart_rx_tb();
         .rx_serial_p  (rx_serial_p),
         .clk_rx_p (clk_rx_p),
         .rst_n_p      (rst_n_p),
-        .ready_p      (1'b1),  // Always ready to receive frames
+        .ready_p      (ready_p),  // Always ready to receive frames
         .valid_p      (valid_p),
         .data_rx_p      (data_rx_p),
         .frame_err_p  (frame_err_p),
         .parity_err_p (parity_err_p)
     );
 
+        uart_rx_sync rx_sync
+    (
+        .uart_rx(uart_rx),
+        .uart_rx_db(rx_serial_p),
+        .clk(rx_tick),
+        .rst_n(s_axi_aresetn)
+    );
+
     // Clock generation: 50 MHz
-    always #1 clk_rx_p = ~clk_rx_p;
+    //always #1 clk_rx_p = ~clk_rx_p;
 
     // Transmit one UART bit (16x oversampling)
     task send_bit;
         input bit_value;
         begin
             @(posedge clk_rx_p);
-            rx_serial_p = bit_value;
+            uart_rx = bit_value;
             repeat (16) @(posedge clk_rx_p);
         end
     endtask
@@ -66,11 +82,11 @@ module uart_rx_tb();
 		end
 
         // Reset
-        rst_n_p = 0;
-        rx_serial_p = 1;
+        //rst_n_p = 0;
+        uart_rx = 1;
 
         #5;
-        rst_n_p = 1;
+        //rst_n_p = 1;
 
         // Allow receiver to stabilize
         #10;
@@ -84,7 +100,7 @@ module uart_rx_tb();
         $display("Frame error: %b", frame_err_p);
         $display("Parity error: %b", parity_err_p);
 
-        $finish;
+        //$finish;
     end
 
 endmodule

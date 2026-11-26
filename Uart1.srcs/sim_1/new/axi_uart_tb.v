@@ -44,13 +44,29 @@ module axi_uart_tb(
     wire tx_ready;
     wire tx_valid;
     wire [7:0] tx_data;
-    reg [7:0] rx_data;
-    reg rx_valid;
+    wire [7:0] rx_data;
+    wire rx_valid;
     wire rx_ready;
 
     localparam ADDR_TX_BUFF   = 6'h00;     
     localparam ADDR_RX_BUFF   = 6'h04;
     localparam ADDR_STATUS    = 6'h08;
+    wire tx_tick;
+    wire rx_tick;
+    wire rx_serial_p;
+    wire frame_err_p;
+    wire parity_err_p;
+    reg uart_rx;
+
+    uart_clk_gen #(
+        .MASTER_CLOCK(CLK_FREQ)
+    ) clk_gen
+    (
+        .in_clk(s_axi_aclk),
+        .rst_n(s_axi_aresetn),
+        .tx_tick(tx_tick),
+        .rx_tick(rx_tick)
+    );
 
     axi_fifo_tx fifo
     (
@@ -75,7 +91,7 @@ module axi_uart_tb(
         .s_axi_rvalid(s_axi_rvalid),
         .s_axi_rdata(s_axi_rdata),
         .s_axi_rresp(s_axi_rresp),
-        .int_clk(int_clk),
+        .int_clk(tx_tick),
         .tx_ready(tx_ready),
         .tx_valid(tx_valid),
         .tx_data(tx_data),
@@ -86,7 +102,7 @@ module axi_uart_tb(
 
     uart_tx tx
     (
-        .clk_tx_p(int_clk),
+        .clk_tx_p(tx_tick),
         .rst_n_p(s_axi_aresetn),
         .data_tx_p(tx_data),
         .valid_p(tx_valid),
@@ -94,8 +110,32 @@ module axi_uart_tb(
         .tx_serial_p(tx_serial)
     );
 
+    //uart_rx rx
+    //(
+    //    .rx_serial_p(rx_serial_p),
+    //    .clk_rx_p(rx_tick),
+    //    .rst_n_p(s_axi_aresetn),
+     //   .ready_p(rx_ready),
+    //    .valid_p(rx_valid),
+    //    .data_rx_p(rx_data),
+    //    .frame_err_p(frame_err_p),
+    //    .parity_err_p(parity_err_p)
+    //);
+
+
+
+    uart_rx_tb uart_rx_tb_inst (
+        .rx_tick(rx_tick),
+        .s_axi_aresetn(s_axi_aresetn),
+        .ready_p(rx_ready),
+        .valid_p(rx_valid),
+        .data_rx_p(rx_data),
+        .frame_err_p(frame_err_p),
+        .parity_err_p(parity_err_p)
+    );
+
     always #(CLK_PERIOD_NS / 2) s_axi_aclk = ~s_axi_aclk;
-    always #(INT_CLK_PERIOD_NS / 2) int_clk = ~int_clk;
+    //always #(INT_CLK_PERIOD_NS / 2) int_clk = ~int_clk;
 
     task tx_transaction;
         input [31:0] data;
@@ -149,10 +189,6 @@ module axi_uart_tb(
         end
     end
 
-    initial begin
-        rx_valid = 0;
-        rx_data = 8'h00;
-    end
 
     initial begin
         s_axi_awaddr = 0;
