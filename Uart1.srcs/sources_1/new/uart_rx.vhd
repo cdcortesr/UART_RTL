@@ -118,9 +118,11 @@ begin
 		elsif (rising_edge(clk_rx_p)) then
 			case rx_state_s is
 				when IDLE =>
+					if (valid_p = '1' and ready_p = '1') then
+						valid_p <= '0';
+					end if;
 					if (falling_edge(rx_serial_p)) then
 						-- When start is detected, previous frame signals are cleared		
-						valid_p <= '0';
 						buffer_s	<= (others => '0');
 						data_rx_p 	<= (others => '0');
 						frame_err_p <= FALSE;
@@ -161,14 +163,14 @@ begin
 					end if;
 				when STOP =>
 					if (half_bit_s = TRUE) then
-						valid_p <= '1';
-						data_rx_p <= buffer_s;
 						if (rx_serial_p = '0')then
 							frame_err_p <= TRUE;
 						end if;
 					end if;
 					if (full_bit_s = TRUE) then
-						rx_state_s <= IDLE when ready_p = '1' else STOP;	-- Hold FSM until sink is ready to receive data
+						valid_p <= '1';
+						data_rx_p <= buffer_s;
+						rx_state_s <= IDLE;	
 						st_detected_s <= FALSE;		-- Set to false so halfbit process stops counting until next frame is detected
 					end if;
 			end case;

@@ -259,8 +259,11 @@ module axi_fifo_tx #(
     // RX Buffer Write FSM
 
     always @(posedge rx_clk)begin
-        rx_ready <= !full_rx;
+        if (!full_rx) begin
+            rx_ready <= 1'b1;
+        end
         if (rx_valid && rx_ready) begin
+            rx_ready <= 1'b0;
             mem_r[wr_ptr_rx[ADDR_WIDTH-1:0]] <= rx_data;   // Write data into FIFO from RX buffer
             wr_ptr_rx <= wr_ptr_rx + 1'b1;   // Increment write pointer after writing
         end
