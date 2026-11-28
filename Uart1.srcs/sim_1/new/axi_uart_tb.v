@@ -13,8 +13,8 @@ module axi_uart_tb(
 
     localparam CLK_FREQ = 100_000_000;
     localparam CLK_PERIOD_NS = 1.0e9 / CLK_FREQ;
-    localparam INT_CLK_FREQ = 115_200;   // Assuming same frequency as s_axi_aclk
-    localparam INT_CLK_PERIOD_NS = 1.0e9 / INT_CLK_FREQ;
+    //localparam INT_CLK_FREQ = 115_200;   // Assuming same frequency as s_axi_aclk
+    //localparam INT_CLK_PERIOD_NS = 1.0e9 / INT_CLK_FREQ;
 
     reg s_axi_aclk;
     reg s_axi_aresetn;
@@ -40,7 +40,6 @@ module axi_uart_tb(
     wire [31:0] s_axi_rdata;
     wire [1:0] s_axi_rresp;
 
-    reg int_clk;
     wire tx_ready;
     wire tx_valid;
     wire [7:0] tx_data;
@@ -91,7 +90,8 @@ module axi_uart_tb(
         .s_axi_rvalid(s_axi_rvalid),
         .s_axi_rdata(s_axi_rdata),
         .s_axi_rresp(s_axi_rresp),
-        .int_clk(tx_tick),
+        .tx_clk(tx_tick),
+        .rx_clk(rx_tick),
         .tx_ready(tx_ready),
         .tx_valid(tx_valid),
         .tx_data(tx_data),

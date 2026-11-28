@@ -45,7 +45,8 @@ module axi_fifo_tx #(
     output reg [C_S_AXI_DATA_WIDTH-1:0] s_axi_rdata,
     output reg [1:0] s_axi_rresp,
 
-    input wire int_clk,
+    input wire tx_clk,
+    input wire rx_clk,
 
     // UART tx interface
     input wire tx_ready,
@@ -193,7 +194,7 @@ module axi_fifo_tx #(
 
     // TX Buffer read FSM
 
-    always @(posedge int_clk) begin
+    always @(posedge tx_clk) begin
         if  (!s_axi_aresetn) begin
             rd_ptr_tx <= 0;
         end else begin
@@ -257,7 +258,7 @@ module axi_fifo_tx #(
 
     // RX Buffer Write FSM
 
-    always @(posedge int_clk)begin
+    always @(posedge rx_clk)begin
         rx_ready <= !full_rx;
         if (rx_valid && rx_ready) begin
             mem_r[wr_ptr_rx[ADDR_WIDTH-1:0]] <= rx_data;   // Write data into FIFO from RX buffer
